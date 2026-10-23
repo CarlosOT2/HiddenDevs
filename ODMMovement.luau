@@ -1,3 +1,5 @@
+-- Discord: miranha0 | Roblox: HOMEMARANHA06
+
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")

@@ -1,3 +1,5 @@
+-- Discord: miranha0 | Roblox: HOMEMARANHA06
+
 -- Services
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8,6 +10,7 @@ local SessionData = require(ServerScriptService.Data.SessionData)
 local INFO = require(ServerScriptService.Systems.Modules.INFO)
 local EntityDataTypes = require(ServerStorage.Types.EntityData)
 local ODMMovement = require(ServerScriptService.Systems.Modules.ODM.Movement)
+
 
 local function IsCollidableResult(result: RaycastResult?): boolean
 	return result ~= nil and result.Instance:IsA("BasePart") and result.Instance.CanCollide
