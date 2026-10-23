@@ -57,7 +57,10 @@ RunService.PreSimulation:Connect(function(deltaTime)
 		
 		-- Updates the speed.
 		if odm.decelerating then
-			odm.speed = math.max(odm.speed - INFO.ODM.Deceleration * deltaTime, 0)
+			odm.speed = math.max(
+                odm.speed - INFO.ODM.Deceleration * deltaTime, 
+                0
+            )
 		else
 			odm.speed = INFO.ODM.Speed
 		end
@@ -99,7 +102,9 @@ RunService.PreSimulation:Connect(function(deltaTime)
 
 		-- Falling does not affect rotation, keeping the body more upright.
 		local orientationDirection = smoothedDirection
-		if orientationDirection.Magnitude <= 0.001 then orientationDirection = root.CFrame.LookVector end
+		if orientationDirection.Magnitude <= 0.001 then 
+            orientationDirection = root.CFrame.LookVector 
+        end
 		orientationDirection = orientationDirection.Unit
 
 		alignOrientation.Enabled = true
@@ -130,7 +135,10 @@ RunService.PreSimulation:Connect(function(deltaTime)
 			
 			local currentFallSpeed = math.abs(linearVelocity.VectorVelocity.Y)
 			local groundCheckDistance = 3.5 + currentFallSpeed * deltaTime
-			local groundResult = workspace:Raycast(root.Position, Vector3.new(0, -groundCheckDistance, 0), params)
+			local groundResult = workspace:Raycast(
+                root.Position, 
+                Vector3.new(0, -groundCheckDistance, 0), params
+            )
 			
 			local touchingGround = IsCollidableResult(groundResult)
 		
@@ -181,7 +189,12 @@ RunService.PreSimulation:Connect(function(deltaTime)
 		end
 		]]
 
-		linearVelocity.VectorVelocity = linearVelocity.VectorVelocity:Lerp(targetVelocity, math.clamp(15 * deltaTime, 0, 1))
-		if odm.speed <= 0 and odm.touchingGround then ODMMovement.Stop(player) end
+		linearVelocity.VectorVelocity = linearVelocity.VectorVelocity:Lerp(
+            targetVelocity, 
+            math.clamp(15 * deltaTime, 0, 1)
+        )
+		if odm.speed <= 0 and odm.touchingGround then 
+            ODMMovement.Stop(player) 
+        end
 	end
 end)
