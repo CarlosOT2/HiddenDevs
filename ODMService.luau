@@ -153,7 +153,7 @@ local function CreateMovementComponents(player: Player): true?
 end
 
 ------------------------------------------------------------------------------------------------
--- Public methods
+-- Methods
 
 function Start(
 	player: Player,
