@@ -1,5 +1,5 @@
--- Discord: miranha0 | Roblox: HOMEMARANHA06
 
+-- Discord: miranha0 | Roblox: HOMEMARANHA06
 
 ------------------------------------------------------------------------------------------------
 -- Services
@@ -403,25 +403,27 @@ function Decelerate(player: Player)
 	local character = data.references.char
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 
-	if root then
-		-- AssemblyLinearVelocity represents the actual movement of the character,
-		-- including the influence of physics.
-		local velocity = root.AssemblyLinearVelocity
+	if not root then
+		return
+	end
 
-		if velocity.Magnitude > 0.001 then
-			-- Preserve the current momentum direction.
-			-- Unit converts the velocity into a direction without its original magnitude.
-			odm.lastDirectionDecelerating = velocity.Unit
-		else
-			-- If the character has almost no velocity, use its facing direction.
-			-- This prevents attempting to normalize a nearly zero velocity vector.
-			local lookDirection = root.CFrame.LookVector
+	-- AssemblyLinearVelocity represents the actual movement of the character,
+	-- including the influence of physics.
+	local velocity = root.AssemblyLinearVelocity
 
-			odm.lastDirectionDecelerating =
-				if lookDirection.Magnitude > 0.001
-				then lookDirection.Unit
-				else Vector3.new(0, 0, -1)
-		end
+	if velocity.Magnitude > 0.001 then
+		-- Preserve the current momentum direction.
+		-- Unit converts the velocity into a direction without its original magnitude.
+		odm.lastDirectionDecelerating = velocity.Unit
+	else
+		-- If the character has almost no velocity, use its facing direction.
+		-- This prevents attempting to normalize a nearly zero velocity vector.
+		local lookDirection = root.CFrame.LookVector
+
+		odm.lastDirectionDecelerating =
+			if lookDirection.Magnitude > 0.001
+			then lookDirection.Unit
+			else Vector3.new(0, 0, -1)
 	end
 
 	-- The simulation now knows that it must gradually reduce movement speed.
@@ -560,9 +562,11 @@ local function getMovementDirection(
 	-- If the character is already almost at the target, normalizing the difference
 	-- could produce an unstable direction.
 	-- Reuse the previous direction as a fallback to prevent sudden direction changes.
-	return if difference.Magnitude <= 0.001
-		then odm.smoothedDirection or root.CFrame.LookVector
-		else difference.Unit
+	if difference.Magnitude <= 0.001 then
+		return odm.smoothedDirection or root.CFrame.LookVector
+	end
+
+	return difference.Unit
 end
 
 -- Updates the character's facing direction.
@@ -593,9 +597,11 @@ local function updateOrientation(
 
 	-- Normalize the result because interpolation can produce a vector
 	-- whose magnitude is not exactly one.
-	smoothedDirection = if smoothedDirection.Magnitude > 0.001
-		then smoothedDirection.Unit
-		else direction
+	if smoothedDirection.Magnitude > 0.001 then
+		smoothedDirection = smoothedDirection.Unit
+	else
+		smoothedDirection = direction
+	end
 
 	-- Save the result for the next physics update.
 	odm.smoothedDirection = smoothedDirection
@@ -729,9 +735,9 @@ local function applyDeceleration(
 	-- Store the latest ground state so the main simulation can decide when to stop ODM.
 	odm.touchingGround = touchingGround
 
+	-- When grounded, remove the vertical component from the movement direction.
+	-- This prevents the controller from continuing to request downward movement.
 	if touchingGround then
-		-- When grounded, remove the vertical component from the movement direction.
-		-- This prevents the controller from continuing to request downward movement.
 		local horizontalDirection = Vector3.new(
 			direction.X,
 			0,
@@ -740,33 +746,177 @@ local function applyDeceleration(
 
 		-- Preserve horizontal movement at the current deceleration speed.
 		-- If the direction has no horizontal component, use zero velocity instead.
-		targetVelocity = if horizontalDirection.Magnitude > 0.001
-			then horizontalDirection.Unit * odm.speed
-			else Vector3.zero
+		if horizontalDirection.Magnitude > 0.001 then
+			targetVelocity = horizontalDirection.Unit * odm.speed
+		else
+			targetVelocity = Vector3.zero
+		end
 
 		humanoid.PlatformStand = false
-	else
-		-- Calculate how much of the original ODM speed remains.
-		-- Clamping prevents values outside the expected 0-1 range.
-		local speedPercent = math.clamp(
-			odm.speed / INFO.ODM.Speed,
-			0,
-			1
-		)
-
-		-- As ODM speed decreases, the additional falling speed increases.
-		-- This helps the character descend naturally after releasing the hooks.
-		local fallSpeed = INFO.ODM.FallSpeed
-			* (1 - speedPercent)
-			* INFO.ODM.FallMultiplier
-
-		-- Add downward velocity to the movement target.
-		-- Orientation is calculated separately, so this does not rotate
-		-- the character toward the ground.
-		targetVelocity += Vector3.new(0, -fallSpeed, 0)
+		return targetVelocity
 	end
 
+	-- Calculate how much of the original ODM speed remains.
+	-- Clamping prevents values outside the expected 0-1 range.
+	local speedPercent = math.clamp(
+		odm.speed / INFO.ODM.Speed,
+		0,
+		1
+	)
+
+	-- As ODM speed decreases, the additional falling speed increases.
+	-- This helps the character descend naturally after releasing the hooks.
+	local fallSpeed = INFO.ODM.FallSpeed
+		* (1 - speedPercent)
+		* INFO.ODM.FallMultiplier
+
+	-- Add downward velocity to the movement target.
+	-- Orientation is calculated separately, so this does not rotate
+	-- the character toward the ground.
+	targetVelocity += Vector3.new(0, -fallSpeed, 0)
+
 	return targetVelocity
+end
+
+------------------------------------------------------------------------------------------------
+-- Entity update
+
+-- Updates ODM movement for a single entity.
+--
+-- This function contains the complete processing flow for one player.
+-- Separating it from the PreSimulation loop reduces nesting and keeps the loop
+-- responsible only for iterating through entities.
+--
+-- Each early return prevents the remaining calculations from running when
+-- the entity is not ready or does not need an ODM update.
+local function updateEntity(entityData: EntityDataTypes.Data, deltaTime: number)
+	-- This controller only handles players.
+	-- Other entity types may have their own movement systems.
+	if entityData.type ~= "player" then
+		return
+	end
+
+	local odm = entityData.temp.ODM
+
+	-- Entities without ODM state do not need to be processed.
+	if not odm then
+		return
+	end
+
+	local leftActive = odm.hooks.Left.active
+	local rightActive = odm.hooks.Right.active
+
+	-- Skip idle entities.
+	-- The exception is deceleration: even after both hooks are released,
+	-- movement must continue until the character has safely stopped.
+	if not leftActive and not rightActive and not odm.decelerating then
+		return
+	end
+
+	-- Resolve the current character and player references.
+	-- These references come from SessionData rather than being cached globally.
+	local character = entityData.references.char
+	local player = entityData.references.player
+
+	-- Ignore missing characters and players that have already left the server.
+	if not character or not player or player.Parent ~= Players then
+		return
+	end
+
+	-- Resolve the instances required by the physics calculations.
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	-- Reuse the references created by createMovementComponents().
+	local linearVelocity = odm.LinearVelocityReference
+	local alignOrientation = odm.AlignOrientationReference
+
+	-- Validate the character assembly before performing physics calculations.
+	if not root or not root:IsA("BasePart") or not humanoid then
+		return
+	end
+
+	-- Both constraints are required.
+	-- Updating movement without orientation, or orientation without movement,
+	-- would leave the controller in an inconsistent state.
+	if not linearVelocity or not alignOrientation then
+		return
+	end
+
+	-- Update the current movement speed.
+	if odm.decelerating then
+		-- Reduce speed according to the configured deceleration rate.
+		-- Multiplying by deltaTime makes the reduction independent of frame rate.
+		--
+		-- math.max prevents speed from becoming negative.
+		odm.speed = math.max(
+			odm.speed - INFO.ODM.Deceleration * deltaTime,
+			0
+		)
+	else
+		-- While at least one hook is active, maintain the configured ODM speed.
+		odm.speed = INFO.ODM.Speed
+	end
+
+	-- Determine whether movement should follow a hook or preserve release momentum.
+	local direction = getMovementDirection(entityData, root)
+
+	if not direction then
+		-- No valid movement direction remains.
+		-- Use the regular deceleration flow instead of abruptly stopping the character.
+		Decelerate(player)
+		return
+	end
+
+	-- Update orientation before calculating lateral movement.
+	-- getTargetVelocity() uses root.CFrame.RightVector, so it should use
+	-- the latest character orientation.
+	updateOrientation(entityData, root, direction, deltaTime)
+
+	-- Calculate forward movement, boost and lateral movement.
+	local targetVelocity = getTargetVelocity(
+		entityData,
+		root,
+		direction
+	)
+
+	-- Apply ground detection and falling behavior only during deceleration.
+	if odm.decelerating then
+		targetVelocity = applyDeceleration(
+			entityData,
+			root,
+			humanoid,
+			direction,
+			targetVelocity,
+			deltaTime
+		)
+	end
+
+	-- Smooth the final velocity after all movement modifiers have been applied.
+	--
+	-- This prevents abrupt changes when:
+	-- - Boost starts or ends.
+	-- - Lateral movement changes.
+	-- - The hook target changes.
+	-- - Additional falling velocity is applied.
+	--
+	-- The interpolation factor is scaled by deltaTime and clamped to prevent
+	-- overshooting the target during unusually large physics steps.
+	linearVelocity.VectorVelocity =
+		linearVelocity.VectorVelocity:Lerp(
+			targetVelocity,
+			math.clamp(15 * deltaTime, 0, 1)
+		)
+
+	-- Only stop when both conditions are satisfied:
+	-- 1. ODM speed has reached zero.
+	-- 2. The ground raycast confirms that the character is touching ground.
+	--
+	-- This prevents the character from being stopped in mid-air just because
+	-- its horizontal movement speed has reached zero.
+	if odm.speed <= 0 and odm.touchingGround then
+		Stop(player)
+	end
 end
 
 ------------------------------------------------------------------------------------------------
@@ -777,142 +927,12 @@ end
 -- targets before Roblox calculates the next physics step.
 --
 -- The main loop coordinates the smaller helper functions:
--- 1. Validate the entity and its movement components.
--- 2. Update the current ODM speed.
--- 3. Determine the movement direction.
--- 4. Update character orientation.
--- 5. Calculate target velocity.
--- 6. Apply deceleration adjustments when necessary.
--- 7. Smooth and apply the final velocity.
--- 8. Stop ODM when deceleration is complete and the character is grounded.
+-- 1. Iterate through the registered entities.
+-- 2. Delegate each entity's movement processing to updateEntity().
+--
+-- Keeping the loop this small makes the simulation easier to read and maintain.
 RunService.PreSimulation:Connect(function(deltaTime)
 	for _, entityData in pairs(SessionData.Entity.GetAll()) do
-		-- This controller only handles players.
-		-- Other entity types may have their own movement systems.
-		if entityData.type ~= "player" then
-			continue
-		end
-
-		local odm = entityData.temp.ODM
-
-		-- Entities without ODM state do not need to be processed.
-		if not odm then
-			continue
-		end
-
-		local leftActive = odm.hooks.Left.active
-		local rightActive = odm.hooks.Right.active
-
-		-- Skip idle entities.
-		-- The exception is deceleration: even after both hooks are released,
-		-- movement must continue until the character has safely stopped.
-		if not leftActive and not rightActive and not odm.decelerating then
-			continue
-		end
-
-		-- Resolve the current character and player references.
-		-- These references come from SessionData rather than being cached globally.
-		local character = entityData.references.char
-		local player = entityData.references.player
-
-		-- Ignore missing characters and players that have already left the server.
-		if not character or not player or player.Parent ~= Players then
-			continue
-		end
-
-		-- Resolve the instances required by the physics calculations.
-		local root = character:FindFirstChild("HumanoidRootPart")
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-		-- Reuse the references created by createMovementComponents().
-		local linearVelocity = odm.LinearVelocityReference
-		local alignOrientation = odm.AlignOrientationReference
-
-		-- Validate the character assembly before performing physics calculations.
-		if not root or not root:IsA("BasePart") or not humanoid then
-			continue
-		end
-
-		-- Both constraints are required.
-		-- Updating movement without orientation, or orientation without movement,
-		-- would leave the controller in an inconsistent state.
-		if not linearVelocity or not alignOrientation then
-			continue
-		end
-
-		-- Update the current movement speed.
-		if odm.decelerating then
-			-- Reduce speed according to the configured deceleration rate.
-			-- Multiplying by deltaTime makes the reduction independent of frame rate.
-			--
-			-- math.max prevents speed from becoming negative.
-			odm.speed = math.max(
-				odm.speed - INFO.ODM.Deceleration * deltaTime,
-				0
-			)
-		else
-			-- While at least one hook is active, maintain the configured ODM speed.
-			odm.speed = INFO.ODM.Speed
-		end
-
-		-- Determine whether movement should follow a hook or preserve release momentum.
-		local direction = getMovementDirection(entityData, root)
-
-		if not direction then
-			-- No valid movement direction remains.
-			-- Use the regular deceleration flow instead of abruptly stopping the character.
-			Decelerate(player)
-			continue
-		end
-
-		-- Update orientation before calculating lateral movement.
-		-- getTargetVelocity() uses root.CFrame.RightVector, so it should use
-		-- the latest character orientation.
-		updateOrientation(entityData, root, direction, deltaTime)
-
-		-- Calculate forward movement, boost and lateral movement.
-		local targetVelocity = getTargetVelocity(
-			entityData,
-			root,
-			direction
-		)
-
-		-- Apply ground detection and falling behavior only during deceleration.
-		if odm.decelerating then
-			targetVelocity = applyDeceleration(
-				entityData,
-				root,
-				humanoid,
-				direction,
-				targetVelocity,
-				deltaTime
-			)
-		end
-
-		-- Smooth the final velocity after all movement modifiers have been applied.
-		--
-		-- This prevents abrupt changes when:
-		-- - Boost starts or ends.
-		-- - Lateral movement changes.
-		-- - The hook target changes.
-		-- - Additional falling velocity is applied.
-		--
-		-- The interpolation factor is scaled by deltaTime and clamped to prevent
-		-- overshooting the target during unusually large physics steps.
-		linearVelocity.VectorVelocity =
-			linearVelocity.VectorVelocity:Lerp(
-				targetVelocity,
-				math.clamp(15 * deltaTime, 0, 1)
-			)
-
-		-- Only stop when both conditions are satisfied:
-		-- 1. ODM speed has reached zero.
-		-- 2. The ground raycast confirms that the character is touching ground.
-		--
-		-- This prevents the character from being stopped in mid-air just because
-		-- its horizontal movement speed has reached zero.
-		if odm.speed <= 0 and odm.touchingGround then
-			Stop(player)
-		end
+		updateEntity(entityData, deltaTime)
 	end
 end)
